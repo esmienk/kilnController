@@ -76,7 +76,8 @@ class MAX31855(object):
                 # raise MAX31855Error("No Connection")
                 print("MAX31855Error(No Connection)")
             elif shortToGround:
-                raise MAX31855Error("Thermocouple short to ground")
+                #raise MAX31855Error("Thermocouple short to ground")
+                print("Thermocouple reports short to ground")
             elif shortToVCC:
                 raise MAX31855Error("Thermocouple short to VCC")
             else:

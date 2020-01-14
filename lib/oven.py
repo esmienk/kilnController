@@ -59,6 +59,11 @@ class Oven (threading.Thread):
 
     def __init__(self, simulate=False, time_step=config.sensor_time_wait):
         threading.Thread.__init__(self)
+        self.profile = None
+        self.start_time = 0
+        self.runtime = 0
+        self.target = 0
+        self.state = Oven.STATE_IDLE
         self.daemon = True
         self.simulate = simulate
         self.time_step = time_step
@@ -78,7 +83,6 @@ class Oven (threading.Thread):
         self.profile = None
         self.start_time = 0
         self.runtime = 0
-        self.totaltime = 0
         self.target = 0
         self.door = self.get_door_state()
         self.state = Oven.STATE_IDLE
@@ -90,7 +94,7 @@ class Oven (threading.Thread):
     def run_profile(self, profile):
         log.info("Running profile %s" % profile.name)
         self.profile = profile
-        self.totaltime = profile.get_duration()
+        self.profile.running = True
         self.state = Oven.STATE_RUNNING
         self.start_time = datetime.datetime.now()
         log.info("Starting")
@@ -111,8 +115,8 @@ class Oven (threading.Thread):
                 else:
                     runtime_delta = datetime.datetime.now() - self.start_time
                     self.runtime = runtime_delta.total_seconds()
-                log.info("running at %.1f deg C (Target: %.1f) , heat %.2f, cool %.2f, air %.2f, door %s (%.1fs/%.0f)" % (self.temp_sensor.temperature, self.target, self.heat, self.cool, self.air, self.door, self.runtime, self.totaltime))
-                self.target = self.profile.get_target_temperature(self.runtime)
+                log.info("running at %.1f deg C (Target: %.1f) , heat %.2f, cool %.2f, air %.2f, door %s (%.1fs/%.0f)" % (self.temp_sensor.temperature, self.target, self.heat, self.cool, self.air, self.door, self.runtime, self.profile.get_duration()))
+                self.target = self.profile.get_target_temperature(self.runtime, self.temp_sensor.temperature)
                 pid = self.pid.compute(self.target, self.temp_sensor.temperature)
 
                 log.info("pid: %.3f" % pid)
@@ -134,27 +138,18 @@ class Oven (threading.Thread):
                 else:
                     temperature_count = 0
                     
-                #Capture the last temperature value.  This must be done before set_heat, since there is a sleep in there now.
+                # Capture the last temperature value. This must be done before set_heat, since there is a sleep
                 last_temp = self.temp_sensor.temperature
-                
                 self.set_heat(pid)
-                
-                #if self.profile.is_rising(self.runtime):
-                #    self.set_cool(False)
-                #    self.set_heat(self.temp_sensor.temperature < self.target)
-                #else:
-                #    self.set_heat(False)
-                #    self.set_cool(self.temp_sensor.temperature > self.target)
 
                 if self.temp_sensor.temperature > 200:
                     self.set_air(False)
                 elif self.temp_sensor.temperature < 180:
                     self.set_air(True)
 
-                if self.runtime >= self.totaltime:
+                if self.profile.finished():
                     self.reset()
 
-            
             if pid > 0:
                 time.sleep(self.time_step * (1 - pid))
             else:
@@ -209,7 +204,7 @@ class Oven (threading.Thread):
             'heat': self.heat,
             'cool': self.cool,
             'air': self.air,
-            'totaltime': self.totaltime,
+            'totaltime': self.profile.get_duration() if self.profile else 0,
             'door': self.door
         }
         return state
@@ -310,46 +305,99 @@ class TempSensorSimulate(TempSensor):
             time.sleep(self.sleep_time)
 
 
-class Profile():
+class Profile:
     def __init__(self, json_data):
         obj = json.loads(json_data)
         self.name = obj["name"]
-        self.data = sorted(obj["data"])
+        self.data = [ (0, 0) ] + sorted(obj["data"])
+        self.timeDiffs = [ (0, 0) ]
+        for i in range(1, len(self.data)):
+            self.timeDiffs.append( ( self.data[i][0] - self.data[i-1][0], self.data[i][1] ) )
+
+        self.currentState = 1
+        self.numStates = len(self.timeDiffs)
+
+        self.running = False
+        self.lastStateChange = 0
+        self.totalTime = self.data[-1][0]
+        self.overtime = 0
+        log.info(str(self.timeDiffs))
+        log.info(str(self.totalTime))
+
+    def finished(self):
+        return not self.running
 
     def get_duration(self):
-        return max([t for (t, x) in self.data])
+        return self.totalTime + self.overtime
 
-    def get_surrounding_points(self, time):
-        if time > self.get_duration():
-            return (None, None)
-
+    def get_surrounding_points(self):
         prev_point = None
         next_point = None
 
-        for i in range(len(self.data)):
-            if time < self.data[i][0]:
-                prev_point = self.data[i-1]
-                next_point = self.data[i]
-                break
+        if self.currentState < self.numStates:
+            prev_point = self.timeDiffs[self.currentState - 1]
+            next_point = self.timeDiffs[self.currentState]
 
-        return (prev_point, next_point)
+        return prev_point, next_point
 
-    def is_rising(self, time):
-        (prev_point, next_point) = self.get_surrounding_points(time)
+    def is_rising(self):
+        (prev_point, next_point) = self.get_surrounding_points()
         if prev_point and next_point:
             return prev_point[1] < next_point[1]
         else:
             return False
 
-    def get_target_temperature(self, time):
-        if time > self.get_duration():
-            return 0
+    def get_target_temperature(self, time, temperature):
+        relativeTime = time - self.lastStateChange
+        minimumTime = self.timeDiffs[self.currentState][0]
 
-        (prev_point, next_point) = self.get_surrounding_points(time)
+        if relativeTime < minimumTime:
+            targetTemp = self.get_intermediate_temperature(relativeTime)
+        else:
+            if self.check_target(temperature):
+                # phase transition
+                self.currentState += 1
+                self.lastStateChange = time
 
-        incl = float(next_point[1] - prev_point[1]) / float(next_point[0] - prev_point[0])
-        temp = prev_point[1] + (time - prev_point[0]) * incl
-        return temp
+                self.totalTime += self.overtime
+                self.overtime = 0
+
+                targetTemp = self.get_intermediate_temperature(0)
+
+                if self.currentState == self.numStates:
+                    self.running = False
+            else:
+                targetTemp = self.timeDiffs[self.currentState][1]
+                self.overtime = relativeTime - minimumTime
+
+        return targetTemp
+
+    def get_intermediate_temperature(self, relativeTime):
+        (prev_point, next_point) = self.get_surrounding_points()
+
+        if next_point[0] == 0:
+            targetTemp = next_point[1]
+        else:
+            incl = float(next_point[1] - prev_point[1]) / float(next_point[0])
+            targetTemp = prev_point[1] + (relativeTime * incl)
+
+        return targetTemp
+
+    """
+    Tests to see if the target temperature has been acquired.
+    """
+    def check_target(self, temperature):
+        previous, next = self.get_surrounding_points()
+        result = True
+
+        if previous[1] < next[1]:
+            if temperature < next[1]:
+                result = False
+        elif previous[1] > next[1]:
+            if temperature > next[1]:
+                result = False
+
+        return result
 
 
 class PID():

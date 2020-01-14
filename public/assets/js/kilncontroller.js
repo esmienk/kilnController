@@ -1,6 +1,6 @@
 var state = "IDLE";
 var state_last = "";
-var graph = [ 'profile', 'live'];
+var graph = [ 'profile', 'live', 'movingProfile'];
 var points = [];
 var profiles = [];
 var time_mode = 0;
@@ -40,7 +40,14 @@ graph.live =
     color: "#d8d3c5",
     draggable: false
 };
-
+graph.movingProfile =
+{
+    label: "Live Profile",
+    data: [],
+    points: { show: false },
+    color: "#ffd300",
+    draggable: false
+};
 
 function updateProfile(id)
 {
@@ -54,7 +61,7 @@ function updateProfile(id)
     $('#sel_prof_eta').html(job_time);
     $('#sel_prof_cost').html(kwh + ' kWh ('+ currency_type +': '+ cost +')');
     graph.profile.data = profiles[id].data;
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
+    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ] , getOptions());
 }
 
 function deleteProfile()
@@ -79,7 +86,7 @@ function deleteProfile()
     $('#e2').select2('val', 0);
     graph.profile.points.show = false;
     graph.profile.draggable = false;
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
+    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ], getOptions());
 }
 
 
@@ -143,7 +150,7 @@ function updateProfileTable()
                 graph.profile.data[row][col] = value;
             }
             
-            graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
+            graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ], getOptions());
             }
             updateProfileTable();
 
@@ -211,7 +218,8 @@ function runTask()
     }
 
     graph.live.data = [];
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
+    graph.movingProfile.data = [];
+    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ] , getOptions());
 
     ws_control.send(JSON.stringify(cmd));
 
@@ -226,7 +234,8 @@ function runTaskSimulation()
     }
 
     graph.live.data = [];
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
+    graph.movingProfile.data = [];
+    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ] , getOptions());
 
     ws_control.send(JSON.stringify(cmd));
 
@@ -251,7 +260,7 @@ function enterNewMode()
     graph.profile.points.show = true;
     graph.profile.draggable = true;
     graph.profile.data = [];
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
+    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ], getOptions());
     updateProfileTable();
 }
 
@@ -266,7 +275,7 @@ function enterEditMode()
     $('#form_profile_name').val(profiles[selected_profile].name);
     graph.profile.points.show = true;
     graph.profile.draggable = true;
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
+    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ], getOptions());
     updateProfileTable();
 }
 
@@ -282,7 +291,7 @@ function leaveEditMode()
     $('#profile_table').slideUp();
     graph.profile.points.show = false;
     graph.profile.draggable = false;
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
+    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ], getOptions());
 }
 
 function newPoint()
@@ -296,14 +305,14 @@ function newPoint()
         var pointx = 0;
     }
     graph.profile.data.push([pointx, Math.floor((Math.random()*230)+25)]);
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
+    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ], getOptions());
     updateProfileTable();
 }
 
 function delPoint()
 {
     graph.profile.data.splice(-1,1)
-    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
+    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ], getOptions());
     updateProfileTable();
 }
 
@@ -500,6 +509,7 @@ $(document).ready(function()
 
                 $.each(x.log, function(i,v) {
                     graph.live.data.push([v.runtime, v.temperature]);
+                    graph.movingProfile.data.push([v.runtime, v.target]);
                     graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
                 });
             }
@@ -533,22 +543,25 @@ $(document).ready(function()
                     $("#nav_stop").show();
 
                     graph.live.data.push([x.runtime, x.temperature]);
-                    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
+                    graph.movingProfile.data.push([x.runtime, x.target]);
+                    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ] , getOptions());
 
+                    timeElapsed = new Date(parseInt(x.runtime) * 1000).toISOString().substr(11, 8);
                     left = parseInt(x.totaltime-x.runtime);
+                    if (left < 0) { left = 0; }
                     eta = new Date(left * 1000).toISOString().substr(11, 8);
 
                     updateProgress(parseFloat(x.runtime)/parseFloat(x.totaltime)*100);
                     $('#state').html('<span class="" style="font-size: 22px; font-weight: normal"></span><span style="font-family: Digi; font-size: 40px;">' + eta + '</span>');
+                    $('#timeElapsed').html('<span class="" style="font-size: 22px; font-weight: normal"></span><span style="font-family: Digi; font-size: 40px;">' + timeElapsed + '</span>');
                     $('#target_temp').html(parseInt(x.target));
-
-
                 }
                 else
                 {
                     $("#nav_start").show();
                     $("#nav_stop").hide();
                     $('#state').html('<p class="ds-text">'+state+'</p>');
+                    $('#timeElapsed').html('<p class="ds-text">'+state+'</p>');
                 }
 
                 $('#act_temp').html(parseInt(x.temperature));
@@ -616,7 +629,7 @@ $(document).ready(function()
             console.log (e.data);
             x = JSON.parse(e.data);
             graph.live.data.push([x.runtime, x.temperature]);
-            graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
+            graph.plot = $.plot("#graph_container", [ graph.profile, graph.live, graph.movingProfile ] , getOptions());
 
         }
 
